@@ -378,3 +378,119 @@ func TestProtoc(t *testing.T) {
 	}
 	batchCheckAssets(t, w, testCases)
 }
+
+func TestOldReleaseBeyondPageSize(t *testing.T) {
+	const target = "v2024.1.0"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/widget/releases", func(w http.ResponseWriter, r *http.Request) {
+		recent := make([]map[string]any, 0, 30)
+		for i := 30; i >= 1; i-- {
+			recent = append(recent, map[string]any{"tag_name": fmt.Sprintf("v2026.%d.0", i)})
+		}
+		json.NewEncoder(w).Encode(recent)
+	})
+	mux.HandleFunc("/repos/acme/widget/releases/tags/"+target, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": target,
+			"assets": []map[string]any{{
+				"name":                 "widget-" + target + "-linux-x86_64.tar.gz",
+				"browser_download_url": "https://example.com/widget-" + target + "-linux-x86_64.tar.gz",
+				"size":                 1048576,
+				"content_type":         "application/gzip",
+			}},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	h := &handler.Handler{Client: srv.Client(), GHAPI: srv.URL}
+	r := httptest.NewRequest("GET", "/acme/widget@"+target+"?type=json", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Result().StatusCode != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Result().StatusCode, w.Body.String())
+	}
+	checkAsset(t, w, "linux/amd64", "widget-"+target+"-linux-x86_64.tar.gz")
+}
+
+func TestAssumedAssetDeterministic(t *testing.T) {
+	const target = "v1"
+	newAsset := func(name string) map[string]any {
+		return map[string]any{
+			"name":                 name,
+			"browser_download_url": "https://example.com/" + name,
+			"size":                 5 * 1024 * 1024,
+			"content_type":         "application/octet-stream",
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/tool/releases/tags/"+target, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": target,
+			"assets": []map[string]any{
+				newAsset("tool_linux.zip"),
+				newAsset("tool_musllinux.zip"),
+				newAsset("tool_linux_aarch64"),
+				newAsset("tool_musllinux_aarch64.zip"),
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	for i := 0; i < 100; i++ {
+		h := &handler.Handler{Client: srv.Client(), GHAPI: srv.URL}
+		r := httptest.NewRequest("GET", "/acme/tool@"+target+"?type=json", nil)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Result().StatusCode != 200 {
+			t.Fatalf("iter %d: expected 200, got %d: %s", i, w.Result().StatusCode, w.Body.String())
+		}
+		checkAsset(t, w, "linux/amd64", "tool_musllinux.zip")
+		checkAsset(t, w, "linux/arm64", "tool_linux_aarch64")
+	}
+}
+
+func TestDottedRawBinaryAssets(t *testing.T) {
+	const target = "v1"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/tool/releases/tags/"+target, func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": target,
+			"assets": []map[string]any{
+				{
+					"name":                 "tool-v1.linux.amd64",
+					"browser_download_url": "https://example.com/tool-v1.linux.amd64",
+					"size":                 5 * 1024 * 1024,
+				},
+				{
+					"name":                 "tool-v1.linux.amd64.asc",
+					"browser_download_url": "https://example.com/tool-v1.linux.amd64.asc",
+					"size":                 5 * 1024 * 1024,
+				},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	h := &handler.Handler{Client: srv.Client(), GHAPI: srv.URL}
+	r := httptest.NewRequest("GET", "/acme/tool@"+target+"?type=json", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Result().StatusCode, w.Body.String())
+	}
+
+	var result handler.QueryResult
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Assets) != 1 {
+		t.Fatalf("expected one raw binary asset, got %d", len(result.Assets))
+	}
+	asset := result.Assets[0]
+	if asset.Name != "tool-v1.linux.amd64" || asset.Type != ".bin" {
+		t.Fatalf("expected dotted raw binary, got %#v", asset)
+	}
+}

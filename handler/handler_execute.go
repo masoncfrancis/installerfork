@@ -75,36 +75,25 @@ func (h *Handler) getAssetsNoCache(q Query) (string, Assets, error) {
 	release := q.Release
 	// not cached - ask github
 	log.Printf("fetching asset info for %s/%s@%s", user, repo, release)
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases", user, repo)
-	ghas := ghAssets{}
+	base := "https://api.github.com"
+	if h.GHAPI != "" {
+		base = h.GHAPI
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/releases", base, user, repo)
 	if release == "" || release == "latest" {
 		url += "/latest"
-		ghr := ghRelease{}
-		if err := h.get(url, &ghr); err != nil {
-			return release, nil, err
-		}
-		release = ghr.TagName // discovered
-		ghas = ghr.Assets
 	} else {
-		ghrs := []ghRelease{}
-		if err := h.get(url, &ghrs); err != nil {
-			return release, nil, err
-		}
-		found := false
-		for _, ghr := range ghrs {
-			if ghr.TagName == release {
-				found = true
-				if err := h.get(ghr.AssetsURL, &ghas); err != nil {
-					return release, nil, err
-				}
-				ghas = ghr.Assets
-				break
-			}
-		}
-		if !found {
-			return release, nil, fmt.Errorf("release tag '%s' not found", release)
-		}
+		url += "/tags/" + release
 	}
+	ghr := ghRelease{}
+	if err := h.get(url, &ghr); err != nil {
+		if errors.Is(err, errNotFound) && release != "" && release != "latest" {
+			return release, nil, fmt.Errorf("%w: release tag '%s'", errNotFound, release)
+		}
+		return release, nil, err
+	}
+	release = ghr.TagName
+	ghas := ghr.Assets
 	if len(ghas) == 0 {
 		return release, nil, errors.New("no assets found")
 	}
@@ -120,12 +109,11 @@ func (h *Handler) getAssetsNoCache(q Query) (string, Assets, error) {
 	)
 	for _, ga := range ghas {
 		url := ga.BrowserDownloadURL
+		os := getOS(ga.Name)
+		arch := getArch(ga.Name)
 		// only binary containers are supported
 		// TODO deb,rpm etc
-		fext := getFileExt(url)
-		if fext == "" && ga.Size > 1024*1024 {
-			fext = ".bin" // +1MB binary
-		}
+		fext := ga.FileExt()
 		switch fext {
 		case ".bin", ".zip", ".tar.bz", ".tar.bz2", ".tar.xz", ".txz", ".bz2", ".gz", ".tar.gz", ".tgz":
 			// valid
@@ -133,9 +121,6 @@ func (h *Handler) getAssetsNoCache(q Query) (string, Assets, error) {
 			log.Printf("fetched asset has unsupported file type: %s (ext '%s')", ga.Name, fext)
 			continue
 		}
-		// match
-		os := getOS(ga.Name)
-		arch := getArch(ga.Name)
 		// windows not supported yet
 		if os == "windows" {
 			log.Printf("fetched asset is for windows: %s", ga.Name)
@@ -209,12 +194,18 @@ func (h *Handler) getAssetsNoCache(q Query) (string, Assets, error) {
 		index[key] = asset
 	}
 
+	resolved := map[string]Asset{}
 	for _, cAsset := range candidates {
 		// "/loong64" will be assumed to be "linux/loong64"
 		if cAsset.OS == "" {
 			cAsset.OS = "linux"
 		}
 		indexKey := cAsset.Key()
+		if cur, exists := resolved[indexKey]; !exists || cAsset.preferredOver(cur) {
+			resolved[indexKey] = cAsset
+		}
+	}
+	for indexKey, cAsset := range resolved {
 		// and will only be selected if the exact match failed
 		if _, exists := index[indexKey]; !exists {
 			index[indexKey] = cAsset
@@ -294,9 +285,17 @@ func (g ghAsset) IsChecksumFile() bool {
 	return checksumRe.MatchString(strings.ToLower(g.Name)) && g.Size < 64*1024 // maximum file size 64KB
 }
 
+func (g ghAsset) FileExt() string {
+	fext := getFileExt(g.Name)
+	if g.Size > 1024*1024 && (fext == "" || getOS(fext) != "" || getArch(fext) != "") {
+		return ".bin"
+	}
+	return fext
+}
+
 type ghRelease struct {
-	Assets    []ghAsset `json:"assets"`
-	AssetsURL string    `json:"assets_url"`
+	Assets    ghAssets `json:"assets"`
+	AssetsURL string   `json:"assets_url"`
 	Author    struct {
 		ID    int    `json:"id"`
 		Login string `json:"login"`

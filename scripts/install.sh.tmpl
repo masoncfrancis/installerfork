@@ -166,7 +166,7 @@ function install {
 		fail "no binary found ($TMP_BIN is not larger than 1MB)"
 	fi
 	#move into PATH or cwd
-	chmod +x $TMP_BIN || fail "chmod +x failed"
+	chmod 0755 "$TMP_BIN" || fail "chmod 0755 failed"
 	DEST="$OUT_DIR/$PROG"	
 	if [ ! -z "$ASPROG" ]; then
 		DEST="$OUT_DIR/$ASPROG"
@@ -174,9 +174,8 @@ function install {
 	#move without sudo
 	OUT=$(mv $TMP_BIN $DEST 2>&1)
 	STATUS=$?
-	# failed and string contains "Permission denied"
 	if [ $STATUS -ne 0 ]; then
-		if [[ $OUT =~ "Permission denied" ]]; then
+		if [[ $MOVE = "true" ]]; then
 			echo "mv with sudo..."
 			sudo mv $TMP_BIN $DEST || fail "sudo mv failed" 
 		else
