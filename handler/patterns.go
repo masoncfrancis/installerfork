@@ -44,12 +44,12 @@ var (
 		`(mips|mips64|mips64le|mipsle|s390x|s390_64|wasm)` +
 		`(?:[^a-zA-Z0-9]|$)`)
 
-	fuzzArchAmd64 = regexp.MustCompile(`(x?64(bit)?)\b`)
-	fuzzArch386   = regexp.MustCompile(`(x?32(bit)?|x86)\b`)
+	fuzzArchAmd64 = regexp.MustCompile(`(?:[^a-zA-Z0-9]|^)(x64|x?64bit|win64)\b|(?:[^a-zA-Z0-9.]|^)64\b`)
+	fuzzArch386   = regexp.MustCompile(`(?:[^a-zA-Z0-9]|^)(x32|x?32bit|x86|win32)\b|(?:[^a-zA-Z0-9.]|^)32\b`)
 )
 
 var (
-	checksumRe     = regexp.MustCompile(`(checksums|sha256sums)`)
+	checksumRe     = regexp.MustCompile(`(checksums|sha256sums|shasums256)`)
 	fileExtRe      = regexp.MustCompile(`(\.tar)?(\.[a-z][a-z0-9]+)$`)
 	searchGithubRe = regexp.MustCompile(`https:\/\/github\.com\/(\w+)\/(\w+)`)
 )

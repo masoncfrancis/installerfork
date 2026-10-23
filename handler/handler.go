@@ -212,6 +212,9 @@ func (a Asset) preferredOver(other Asset) bool {
 	if am, om := strings.Contains(a.Name, "musl"), strings.Contains(other.Name, "musl"); am != om {
 		return am
 	}
+	if ab, ob := strings.Contains(a.Name, "-baseline"), strings.Contains(other.Name, "-baseline"); ab != ob {
+		return ab
+	}
 	if ag, og := strings.Contains(a.Name, "gnu"), strings.Contains(other.Name, "gnu"); ag != og {
 		return og
 	}
